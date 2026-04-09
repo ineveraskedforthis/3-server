@@ -15,8 +15,9 @@ namespace std {
 #include <unistd.h>
 #include <signal.h>
 #include <chrono>
-#include "network_containers.hpp"
 #include "unordered_dense.h"
+#include <mutex>
+#include <thread>
 
 
 static fd_set udp_singleton;
@@ -29,6 +30,7 @@ static struct timeval timeout { 0, 0 };
 static int udp_socket;
 static int tcp_socket;
 static char udp_buffer[1024] = {0};
+static std::mutex game_state_mtx {};
 
 void
 handle_udp_subscription(
@@ -61,6 +63,15 @@ handle_udp_subscription(
 	}
 }
 
+constexpr inline int ACTION_LOGIN = 0;
+// sent via tcp
+struct action_update {
+	int action;
+	int player_id;
+	int fighter_id;
+	int entity_id;
+};
+
 void handle_tcp_connection(dcon::data_container& container ) {
 	// connection requests
 	connection_address_size = sizeof(client_address);
@@ -86,11 +97,27 @@ void handle_tcp_connection(dcon::data_container& container ) {
 		return;
 	}
 	auto pid = container.create_player();
+	auto fighter = container.create_fighter();
+	container.fighter_set_tx(fighter, 0.f);
+	container.fighter_set_ty(fighter, 0.f);
+	auto location = container.create_spatial_entity();
+	container.force_create_fighter_location(fighter, location);
+	container.force_create_player_control(pid, fighter);
+
+	action_update to_send{};
+	to_send.action = ACTION_LOGIN;
+	to_send.player_id = pid.index();
+	to_send.fighter_id = fighter.index();
+	to_send.entity_id = location.index();
+
+	send(new_connection, (char*)&to_send, sizeof(action_update), 0);
+
 	container.player_set_connection(pid, new_connection);
 	container.player_set_address(pid, client_address.sin_addr.s_addr);
 	FD_SET(new_connection, &active_connections);
 }
 
+// sent via udp
 struct position_update {
 	int timestamp;
 	int destination_player;
@@ -100,6 +127,7 @@ struct position_update {
 	float direction;
 	float speed;
 };
+
 
 void send_position(
 	dcon::data_container& container,
@@ -170,17 +198,27 @@ void sigpipe_handler(int unused)
 
 }
 
+namespace command {
+inline constexpr uint8_t MOVE = 0;
+
+inline constexpr uint8_t CLASS_MAGE = 0;
+inline constexpr uint8_t CLASS_WARRIOR = 1;
+inline constexpr uint8_t CLASS_ROGUE = 2;
+inline constexpr uint8_t CLASS_TOTAL = 3;
+
 struct data {
-	int32_t player;
-	int32_t target_entity;
+	int32_t actor;
+	int32_t target_actor;
 	float target_x;
 	float target_y;
 	uint8_t command_type;
 	uint8_t command_data;
 	uint8_t padding[2];
 };
+}
 
 int consume_command(dcon::data_container& container, int connection, command::data command) {
+	std::lock_guard<std::mutex> lk(game_state_mtx);
 
 	printf("new command %d\n", command.command_type);
 
@@ -384,25 +422,57 @@ int main(int argc, char const* argv[]) {
 	FD_ZERO(&udp_singleton);
 	FD_SET(udp_socket, &udp_singleton);
 	int i;
-	auto now = std::chrono::system_clock::now();
-	auto last_server_state_update = now;
-	bool update_requested = false;
 	int updated = 0;
 	int32_t timestamp = 0;
 	ankerl::unordered_dense::map<in_addr_t, sockaddr_in> internet_address_to_udp_address {};
 
 
+	std::thread updates_of_game_state ([&]() {
+		auto now = std::chrono::system_clock::now();
+		while (1) {
+			auto then = std::chrono::system_clock::now();
+			auto duration = std::chrono::duration_cast<std::chrono::microseconds> (
+				then - now
+			);
+
+			if (duration.count() > 1000 * 1000 / 200) {
+				game_state_mtx.lock();
+				update_game_state(container, duration);
+				now = then;
+				game_state_mtx.unlock();
+			}
+			usleep(10);
+		}
+	});
+
+
+	std::thread network_stuff ([&]() {
+		auto now = std::chrono::system_clock::now();
+		while (1) {
+			handle_udp_subscription(internet_address_to_udp_address);
+			auto then = std::chrono::system_clock::now();
+			auto duration = std::chrono::duration_cast<std::chrono::microseconds> (
+				then - now
+			);
+			if (duration.count() > 1000 * 1000 / 30) {
+				game_state_mtx.lock();
+				now = then;
+				timestamp++;
+				send_network_updates(container, internet_address_to_udp_address, timestamp);
+				game_state_mtx.unlock();
+			}
+			usleep(10);
+		}
+	});
+
+	// TCP
 	while (1) {
-		handle_udp_subscription(internet_address_to_udp_address);
-
 		read_connections = active_connections;
-
 		// retrieve sockets which demand attention
 		if (updated = select(FD_SETSIZE, &read_connections, NULL, NULL, &timeout); updated < 0) {
 			perror("Select error");
 			exit(EXIT_FAILURE);
 		}
-
 		for (i = 0; i < FD_SETSIZE && updated > 0; ++i) {
 			if (!FD_ISSET(i, &read_connections)) {
 				continue;
@@ -419,27 +489,6 @@ int main(int argc, char const* argv[]) {
 				}
 			}
 		}
-
-		auto then = std::chrono::system_clock::now();
-
-		auto duration_game_state_update = std::chrono::duration_cast<std::chrono::microseconds> (
-			then - now
-		);
-		auto duration_network_update = std::chrono::duration_cast<std::chrono::microseconds> (
-			then - last_server_state_update
-		);
-		if (duration_network_update.count() > 1000 * 1000 / 30) {
-			// printf("send update %ld\n", duration_network_update.count() / 1000 / 1000);
-			last_server_state_update = then;
-			timestamp++;
-			send_network_updates(container, internet_address_to_udp_address, timestamp);
-		}
-
-		if (duration_game_state_update.count() > 1000 * 1000 / 200) {
-			update_game_state(container, duration_game_state_update);
-			now = then;
-		}
-
 		usleep(10);
 	}
 }

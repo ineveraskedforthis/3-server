@@ -12,7 +12,7 @@ rule compile_dcon
 
 
 rule compile_server
-  command = $cpp_compiler -g -pg -O2 -Wall -Wno-unused-variable -DAVX2 -DPREFER_ONE_TBB $cpp_standard $dcon_includes $dcon_includes_common -ferror-limit=1 $in -o $out
+  command = $cpp_compiler -g -pg -O2 -Wall -Wno-unused-variable -DAVX2 -DPREFER_ONE_TBB $cpp_standard $dcon_includes $dcon_includes_common -lpthread $in -o $out
 
 rule use
   command = ./DCON $in
