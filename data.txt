@@ -52,6 +52,10 @@ object{
 		type{bitfield}
 	}
 	property{
+		name{model}
+		type{uint8_t}
+	}
+	property{
 		name{character_class}
 		type{uint8_t}
 	}

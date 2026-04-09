@@ -63,6 +63,10 @@ handle_udp_subscription(
 	}
 }
 
+constexpr uint8_t MODEL_RAT = 0;
+constexpr uint8_t MODEL_HUMAN = 1;
+constexpr uint8_t MODEL_UNKNOWN = 255;
+
 constexpr inline int ACTION_LOGIN = 0;
 // sent via tcp
 struct action_update {
@@ -103,6 +107,7 @@ void handle_tcp_connection(dcon::data_container& container ) {
 	container.fighter_set_energy(fighter, 1.f);
 	container.fighter_set_tx(fighter, 0.f);
 	container.fighter_set_ty(fighter, 0.f);
+	container.fighter_set_model(fighter, MODEL_HUMAN);
 	auto location = container.create_spatial_entity();
 	container.force_create_fighter_location(fighter, location);
 	container.force_create_player_control(pid, fighter);
@@ -121,6 +126,8 @@ void handle_tcp_connection(dcon::data_container& container ) {
 }
 
 // sent via udp
+
+
 struct position_update {
 	int timestamp;
 
@@ -134,6 +141,9 @@ struct position_update {
 	float energy;
 	uint16_t hp;
 	uint16_t max_hp;
+
+	uint8_t model;
+	uint8_t padding[3];
 };
 
 
@@ -156,6 +166,7 @@ void send_position(
 		to_send.energy = container.fighter_get_energy(fid);
 		to_send.hp = container.fighter_get_hp(fid);
 		to_send.max_hp = container.fighter_get_max_hp(fid);
+		to_send.model = container.fighter_get_model(fid);
 	}
 
 	sendto(
@@ -424,6 +435,33 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 dcon::data_container container;
 
 int main(int argc, char const* argv[]) {
+	std::default_random_engine rng;
+	std::uniform_real_distribution<float> uniform{0.0, 1.0};
+	std::normal_distribution<float> normal_d{0.f, 1.f};
+	std::normal_distribution<float> size_d{1.f, 0.3f};
+
+
+	// Spawn a few rats
+	for (int count = 0; count < 50; count++) {
+		auto x = normal_d(rng) * 50.f;
+		auto y = normal_d(rng) * 50.f;
+
+		auto fighter = container.create_fighter();
+		container.fighter_set_max_hp(fighter, 5);
+		container.fighter_set_hp(fighter, 5);
+		container.fighter_set_energy(fighter, 1.f);
+		container.fighter_set_tx(fighter, 0.f);
+		container.fighter_set_ty(fighter, 0.f);
+		container.fighter_set_model(fighter, MODEL_RAT);
+
+		auto location = container.create_spatial_entity();
+		container.spatial_entity_set_x(location, x);
+		container.spatial_entity_set_y(location, y);
+		container.spatial_entity_set_direction(location, PI * uniform(rng) * 2.f);
+		container.force_create_fighter_location(fighter, location);
+	}
+
+
 	struct sigaction action { { sigpipe_handler } };
 	sigaction(SIGPIPE, &action, NULL);
 	if (argc == 1) {
