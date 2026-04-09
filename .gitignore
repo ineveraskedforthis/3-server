@@ -1,0 +1,8 @@
+DataContainer*
+flags*
+.ninja_log
+*.exe
+data_ids.hpp
+data.hpp
+DCON
+gmon.out

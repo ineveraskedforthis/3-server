@@ -1,0 +1,24 @@
+cpp_compiler = clang++-21
+cpp_standard = -std=c++23
+
+dcon_includes_common = -I./DataContainer/CommonIncludes
+dcon_includes = -I./DataContainer/DataContainerGenerator
+
+rule clone_dcon
+  command = git clone -b to_upstream --single-branch https://github.com/ineveraskedforthis/DataContainer.git || (cd DataContainer && git pull origin master && cd ..) && touch flags/dcon_cloned
+
+rule compile_dcon
+  command = $cpp_compiler $cpp_standard $dcon_includes $dcon_includes_common -ferror-limit=1 DataContainer/DataContainerGenerator/DataContainerGenerator.cpp DataContainer/DataContainerGenerator/parsing.cpp DataContainer/DataContainerGenerator/code_fragments.cpp DataContainer/DataContainerGenerator/query_fragments.cpp DataContainer/DataContainerGenerator/object_member_fragments.cpp DataContainer/DataContainerGenerator/serialize_fragments.cpp -o $out
+
+
+rule compile_server
+  command = $cpp_compiler -g -pg -O2 -Wall -Wno-unused-variable -DAVX2 -DPREFER_ONE_TBB $cpp_standard $dcon_includes $dcon_includes_common -ferror-limit=1 $in -o $out
+
+rule use
+  command = ./DCON $in
+  restat = 1
+
+build flags/dcon_cloned : clone_dcon
+build DCON : compile_dcon flags/dcon_cloned
+build data.hpp | data_ids.hpp : use ./data.txt | DCON
+build server.exe : compile_server main.cpp | data.hpp

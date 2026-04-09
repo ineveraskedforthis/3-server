@@ -1,0 +1,224 @@
+object{
+	name{udp_subscription}
+	size{3000}
+	storage_type{erasable}
+
+	property{
+		name{address}
+		type{uint32_t}
+	}
+}
+
+object {
+	name{spatial_entity}
+	size{10000}
+	storage_type{erasable}
+	property{
+		name{x}
+		type{float}
+	}
+	property{
+		name{y}
+		type{float}
+	}
+	property{
+		name{direction}
+		type{float}
+	}
+	property{
+		name{speed}
+		type{float}
+	}
+}
+
+object{
+	name{fighter}
+	size{3000}
+	storage_type{erasable}
+	property{
+		name{hp}
+		type{int}
+	}
+	property{
+		name{character_class}
+		type{uint8_t}
+	}
+	property{
+		name{tx}
+		type{float}
+	}
+	property{
+		name{ty}
+		type{float}
+	}
+	property{
+		name{action_timer}
+		type{float}
+	}
+	property{
+		name{action_type}
+		type{uint8_t}
+	}
+	property{
+		name{spell_target_x}
+		type{float}
+	}
+	property{
+		name{spell_target_y}
+		type{float}
+	}
+	property{
+		name{parry_progress}
+		type{float}
+	}
+	property{
+		name{no_damage_timer}
+		type{float}
+	}
+	property{
+		name{rotation}
+		type{float}
+	}
+	property{
+		name{size}
+		type{float}
+	}
+	property{
+		name{sprite_id}
+		type{uint16_t}
+	}
+	property{
+		name{invisible_timer}
+		type{float}
+	}
+	property{
+		name{stunned_timer}
+		type{float}
+	}
+	property{
+		name{charge_timer}
+		type{float}
+	}
+	property{
+		name{parry_cooldown_timer}
+		type{float}
+	}
+}
+
+object{
+	name{projectile}
+	size{10000}
+	storage_type{erasable}
+
+	property{
+		name{x}
+		type{float}
+	}
+	property{
+		name{y}
+		type{float}
+	}
+	property{
+		name{energy}
+		type{float}
+	}
+}
+
+relationship{
+	name{fighter_location}
+	size{4000}
+	storage_type{erasable}
+	link{
+		object{fighter}
+		name{fighter}
+		type{unique}
+	}
+
+	link{
+		object{spatial_entity}
+		name{spatial_entity}
+		type{unique}
+	}
+}
+
+relationship{
+	name{selection}
+	size{400}
+	storage_type{erasable}
+
+	link{
+		object{fighter}
+		name{selected}
+		type{many}
+	}
+
+	link{
+		object{fighter}
+		name{selector}
+		type{unique}
+	}
+}
+
+relationship{
+	name{homing_target}
+	size{10000}
+	storage_type{erasable}
+
+	link{
+		object{fighter}
+		name{target}
+		type{many}
+	}
+
+	link{
+		object{projectile}
+		name{projectile}
+		type{unique}
+	}
+}
+
+object{
+	name{player}
+	size{2000}
+	storage_type{erasable}
+	property{
+		name{name}
+		type{uint16_t}
+	}
+
+	property{
+		name{connection}
+		type{int32_t}
+	}
+	property{
+		name{address}
+		type{uint32_t}
+	}
+
+	property{
+		name{know_myself}
+		type{bitfield}
+	}
+	property{
+		name{know_my_body}
+		type{bitfield}
+	}
+}
+
+relationship{
+	name{player_control}
+	size{3000}
+	storage_type{erasable}
+
+	link{
+		object{player}
+		name{controller}
+		type{unique}
+	}
+
+	link{
+		object{fighter}
+		name{controlled}
+		type{unique}
+	}
+}
