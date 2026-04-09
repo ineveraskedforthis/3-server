@@ -98,6 +98,9 @@ void handle_tcp_connection(dcon::data_container& container ) {
 	}
 	auto pid = container.create_player();
 	auto fighter = container.create_fighter();
+	container.fighter_set_max_hp(fighter, 10);
+	container.fighter_set_hp(fighter, 10);
+	container.fighter_set_energy(fighter, 1.f);
 	container.fighter_set_tx(fighter, 0.f);
 	container.fighter_set_ty(fighter, 0.f);
 	auto location = container.create_spatial_entity();
@@ -120,6 +123,7 @@ void handle_tcp_connection(dcon::data_container& container ) {
 // sent via udp
 struct position_update {
 	int timestamp;
+
 	int spatial_entity_id;
 	float x;
 	float y;
@@ -150,7 +154,7 @@ void send_position(
 	to_send.fighter_id = fid.index();
 	if (fid) {
 		to_send.energy = container.fighter_get_energy(fid);
-		to_send.hp = container.fighter_get_energy(fid);
+		to_send.hp = container.fighter_get_hp(fid);
 		to_send.max_hp = container.fighter_get_max_hp(fid);
 	}
 
@@ -217,6 +221,7 @@ namespace command {
 inline constexpr uint8_t MOVE = 0;
 inline constexpr uint8_t RUN_START = 1;
 inline constexpr uint8_t RUN_STOP = 2;
+inline constexpr uint8_t ATTACK_START = 3;
 
 inline constexpr uint8_t CLASS_MAGE = 0;
 inline constexpr uint8_t CLASS_WARRIOR = 1;
@@ -407,7 +412,9 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 				spent_energy *= energy_walking_spend;
 			}
 
-			energy_loss += spent_energy;
+			if (norm > 0.f) {
+				energy_loss += spent_energy;
+			}
 		}
 
 		container.fighter_set_energy(fid, std::clamp(container.fighter_get_energy(fid) + energy_gain - energy_loss, 0.f, 1.f));
