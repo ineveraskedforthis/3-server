@@ -120,12 +120,16 @@ void handle_tcp_connection(dcon::data_container& container ) {
 // sent via udp
 struct position_update {
 	int timestamp;
-	int destination_player;
 	int spatial_entity_id;
 	float x;
 	float y;
 	float direction;
 	float speed;
+
+	int fighter_id;
+	float energy;
+	uint16_t hp;
+	uint16_t max_hp;
 };
 
 
@@ -134,13 +138,22 @@ void send_position(
 	sockaddr_in& target_address,
 	int timestamp,
 	position_update& to_send,
-	dcon::spatial_entity_id seid
+	dcon::spatial_entity_id seid,
+	dcon::fighter_id fid
 ) {
 	to_send.spatial_entity_id = seid.index();
 	to_send.x = container.spatial_entity_get_x(seid);
 	to_send.y = container.spatial_entity_get_y(seid);
 	to_send.direction = container.spatial_entity_get_direction(seid);
 	to_send.speed = container.spatial_entity_get_speed(seid);
+
+	to_send.fighter_id = fid.index();
+	if (fid) {
+		to_send.energy = container.fighter_get_energy(fid);
+		to_send.hp = container.fighter_get_energy(fid);
+		to_send.max_hp = container.fighter_get_max_hp(fid);
+	}
+
 	sendto(
 		udp_socket,
 		(char*)&to_send,
@@ -172,12 +185,14 @@ send_network_update_player(
 	to_send.timestamp = timestamp;
 
 	container.for_each_spatial_entity([&](auto location){
+		auto fighter = container.spatial_entity_get_fighter_from_fighter_location(location);
 		send_position(
 			container,
 			udp_address_iterator,
 			timestamp,
 			to_send,
-			location
+			location,
+			fighter
 		);
 	});
 }
@@ -200,6 +215,8 @@ void sigpipe_handler(int unused)
 
 namespace command {
 inline constexpr uint8_t MOVE = 0;
+inline constexpr uint8_t RUN_START = 1;
+inline constexpr uint8_t RUN_STOP = 2;
 
 inline constexpr uint8_t CLASS_MAGE = 0;
 inline constexpr uint8_t CLASS_WARRIOR = 1;
@@ -247,7 +264,17 @@ int consume_command(dcon::data_container& container, int connection, command::da
 	) {
 		container.fighter_set_tx(fighter, command.target_x);
 		container.fighter_set_ty(fighter, command.target_y);
+	} else if (
+		command.command_type == command::RUN_START
+		&& container.fighter_get_energy(fighter) > 0.2f
+	) {
+		container.fighter_set_running(fighter, true);
+	} else if (
+		command.command_type == command::RUN_STOP
+	) {
+		container.fighter_set_running(fighter, false);
 	}
+
 
 	return 0;
 }
@@ -329,6 +356,10 @@ void rotate_toward(dcon::data_container & container, float dt, dcon::spatial_ent
 void update_game_state(dcon::data_container & container, std::chrono::microseconds last_tick) {
 	float dt = float(last_tick.count()) / 1'000'000.f;
 
+	float energy_regen_rate = 0.1f;
+	float energy_walking_spend = 0.05f;
+	float energy_running_spend = 0.2f;
+
 	container.for_each_fighter([&](auto fid){
 		auto position = container.fighter_get_fighter_location(fid);
 		auto spatial = container.fighter_location_get_spatial_entity(position);
@@ -340,8 +371,17 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 		auto dx = tx;
 		auto dy = ty;
 
+		auto energy_gain = dt * energy_regen_rate;
+		auto energy_loss = 0.f;
+
 		auto rotation_speed = 4.5f;
-		float speed_mod = 0.7f * move_speed_from_wrong_direction(container, spatial, dx, dy);
+		float speed_mod = 1.5f * move_speed_from_wrong_direction(container, spatial, dx, dy);
+
+		auto running = container.fighter_get_running(fid) && container.fighter_get_energy(fid) > 0.1f;
+		if (running) {
+			speed_mod *= 2.f;
+		}
+
 
 		rotate_toward(container, dt, spatial, dx, dy, rotation_speed);
 
@@ -358,7 +398,19 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 			y += dy * dt * speed_mod;
 			container.spatial_entity_set_x(spatial, x);
 			container.spatial_entity_set_y(spatial, y);
+
+			auto spent_energy = dt;
+
+			if (running) {
+				spent_energy *= energy_running_spend;
+			} else {
+				spent_energy *= energy_walking_spend;
+			}
+
+			energy_loss += spent_energy;
 		}
+
+		container.fighter_set_energy(fid, std::clamp(container.fighter_get_energy(fid) + energy_gain - energy_loss, 0.f, 1.f));
 	});
 }
 

@@ -40,6 +40,18 @@ object{
 		type{int}
 	}
 	property{
+		name{max_hp}
+		type{int}
+	}
+	property{
+		name{energy}
+		type{float}
+	}
+	property{
+		name{running}
+		type{bitfield}
+	}
+	property{
 		name{character_class}
 		type{uint8_t}
 	}
