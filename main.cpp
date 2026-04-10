@@ -111,8 +111,8 @@ void handle_tcp_connection(dcon::data_container& container ) {
 	}
 	auto pid = container.create_player();
 	auto fighter = container.create_fighter();
-	container.fighter_set_max_hp(fighter, 25);
-	container.fighter_set_hp(fighter, 25);
+	container.fighter_set_max_hp(fighter, 40);
+	container.fighter_set_hp(fighter, 40);
 	container.fighter_set_energy(fighter, 1.f);
 	container.fighter_set_tx(fighter, 0.f);
 	container.fighter_set_ty(fighter, 0.f);
@@ -431,6 +431,8 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 	float attack_max_energy = 0.125f  * 5.5f;
 	float attack_half_angle = PI / 4.f;
 
+	auto attack_energy_decay = expf(-dt / 3.f);
+
 	container.for_each_fighter([&](auto fid){
 
 		auto hp = container.fighter_get_hp(fid);
@@ -520,9 +522,9 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 		if (attacking) {
 			auto siphoned_energy = dt * attack_energy_siphon * attack_energy_siphon_efficiency * actual_energy_spending_rate;
 			auto current_energy = container.fighter_get_attack_energy_buffer(fid);
-			cashback += std::max(0.f, current_energy + siphoned_energy - attack_max_energy) / attack_energy_siphon_efficiency / actual_energy_spending_rate;
-			siphoned_energy = std::min(attack_max_energy - current_energy, siphoned_energy);
-			container.fighter_set_attack_energy_buffer(fid, current_energy + siphoned_energy);
+			cashback += std::max(0.f, current_energy * attack_energy_decay + siphoned_energy - attack_max_energy) / attack_energy_siphon_efficiency / actual_energy_spending_rate;
+			siphoned_energy = std::min(attack_max_energy - current_energy * attack_energy_decay, siphoned_energy);
+			container.fighter_set_attack_energy_buffer(fid, current_energy * attack_energy_decay + siphoned_energy);
 		} else {
 			auto attack_strength = floorf(container.fighter_get_attack_energy_buffer(fid) / 0.125f);
 			auto damage = attack_strength * attack_strength;
