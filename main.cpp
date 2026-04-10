@@ -32,6 +32,11 @@ static int tcp_socket;
 static char udp_buffer[1024] = {0};
 static std::mutex game_state_mtx {};
 
+static std::default_random_engine rng;
+static std::uniform_real_distribution<float> uniform{0.0, 1.0};
+static std::normal_distribution<float> normal_d{0.f, 1.f};
+static std::normal_distribution<float> size_d{1.f, 0.3f};
+
 void
 handle_udp_subscription(
 	ankerl::unordered_dense::map<in_addr_t, sockaddr_in>& container
@@ -386,6 +391,26 @@ void rotate_toward(dcon::data_container & container, float dt, dcon::spatial_ent
 	}
 }
 
+void update_ai_state(dcon::data_container & container) {
+	container.for_each_fighter([&](auto fid){
+		auto player = container.fighter_get_controller_from_player_control(fid);
+		if(player) return;
+
+		// for now: just wander aimlessly
+		auto tx = container.fighter_get_tx(fid);
+		auto ty = container.fighter_get_ty(fid);
+		tx += 0.5f *(uniform(rng) - 0.5f);
+		ty += 0.5f *(uniform(rng) - 0.5f);
+		auto norm = tx * tx + ty * ty;
+		if (norm > 0.f) {
+			tx /= norm;
+			ty /= norm;
+		}
+		container.fighter_set_tx(fid, tx);
+		container.fighter_set_ty(fid, ty);
+	});
+}
+
 void update_game_state(dcon::data_container & container, std::chrono::microseconds last_tick) {
 	float dt = float(last_tick.count()) / 1'000'000.f;
 
@@ -546,10 +571,7 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 dcon::data_container container;
 
 int main(int argc, char const* argv[]) {
-	std::default_random_engine rng;
-	std::uniform_real_distribution<float> uniform{0.0, 1.0};
-	std::normal_distribution<float> normal_d{0.f, 1.f};
-	std::normal_distribution<float> size_d{1.f, 0.3f};
+
 
 
 	// Spawn a few rats
@@ -650,6 +672,23 @@ int main(int argc, char const* argv[]) {
 				game_state_mtx.unlock();
 			}
 			usleep(10);
+		}
+	});
+
+	std::thread updates_of_ai_state ([&]() {
+		auto now = std::chrono::system_clock::now();
+		while (1) {
+			auto then = std::chrono::system_clock::now();
+			auto duration = std::chrono::duration_cast<std::chrono::microseconds> (
+				then - now
+			);
+			if (duration.count() > 1000 * 1000 / 2) {
+				game_state_mtx.lock();
+				update_ai_state(container);
+				now = then;
+				game_state_mtx.unlock();
+			}
+			usleep(100);
 		}
 	});
 
