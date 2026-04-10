@@ -136,60 +136,82 @@ void handle_tcp_connection(dcon::data_container& container ) {
 
 // sent via udp
 
+inline constexpr uint8_t UPDATE_SPATIAL = 0;
+inline constexpr uint8_t UPDATE_FIGHTER = 1;
+inline constexpr uint8_t UPDATE_RELINK = 2;
+inline constexpr uint8_t UPDATE_HIGH_PRECISION = 3;
 
-struct position_update {
-	int timestamp;
-
+struct high_precision_update {
+	// 4 bytes
 	int spatial_entity_id;
-	float x;
-	float y;
-	float direction;
-	float speed;
 
+	// 4 bytes
+	float x;
+
+	// 4 bytes
+	float y;
+};
+static_assert(sizeof(high_precision_update) == 12);
+
+struct spatial_update {
+	// 4 bytes
+	int spatial_entity_id;
+
+	// 4 bytes
+	int16_t x;
+	int16_t y;
+
+	// 4 bytes
+	uint8_t direction;
+	uint8_t padding[3];
+};
+static_assert(sizeof(spatial_update) == 12);
+
+struct fighter_update {
+	// 4 bytes
 	int fighter_id;
-	float energy;
-	float attack_energy;
+
+	// 4 bytes
 	int16_t hp;
 	int16_t max_hp;
 
+	// 4 bytes
+	uint8_t energy;
+	uint8_t attack_energy;
 	uint8_t model;
 	uint8_t weapon_type;
-	uint8_t padding[2];
 };
+static_assert(sizeof(fighter_update) == 12);
 
+struct relink_update {
+	// 4 bytes
+	int fighter_id;
 
-void send_position(
-	dcon::data_container& container,
-	sockaddr_in& target_address,
-	int timestamp,
-	position_update& to_send,
-	dcon::spatial_entity_id seid,
-	dcon::fighter_id fid
-) {
-	to_send.spatial_entity_id = seid.index();
-	to_send.x = container.spatial_entity_get_x(seid);
-	to_send.y = container.spatial_entity_get_y(seid);
-	to_send.direction = container.spatial_entity_get_direction(seid);
-	to_send.speed = container.spatial_entity_get_speed(seid);
+	// 4 bytes
+	int spatial_id;
 
-	to_send.fighter_id = fid.index();
-	if (fid) {
-		to_send.energy = container.fighter_get_energy(fid);
-		to_send.attack_energy = container.fighter_get_attack_energy_buffer(fid);
-		to_send.hp = container.fighter_get_hp(fid);
-		to_send.max_hp = container.fighter_get_max_hp(fid);
-		to_send.model = container.fighter_get_model(fid);
-	}
+	// 4 bytes
+	uint8_t padding[4];
+};
+static_assert(sizeof(relink_update) == 12);
 
-	sendto(
-		udp_socket,
-		(char*)&to_send,
-		sizeof(position_update),
-		0,
-		(sockaddr *) &(target_address),
-		sizeof(client_address)
-	);
-}
+struct udp_update {
+	// 4 bytes
+	uint8_t update_type;
+	uint8_t padding[3];
+
+	// 4 bytes
+	int timestamp;
+
+	// 12 bytes
+	union {
+		spatial_update spatial;
+		fighter_update fighter;
+		relink_update relink;
+		high_precision_update high_precision;
+	} payload;
+};
+static_assert(sizeof(udp_update) == 20);
 
 void
 send_network_update_player(
@@ -203,24 +225,110 @@ send_network_update_player(
 		return;
 	}
 
-	// auto control_id = container.player_get_player_control(player);
-	// auto controlled_id = container.player_control_get_controlled(control_id);
 	auto internet_address = container.player_get_address(player);
 	auto& udp_address_iterator = address_mapping[internet_address];
 
-	position_update to_send {};
-	to_send.timestamp = timestamp;
+	auto player_fighter = container.player_get_controlled_from_player_control(player);
+	auto player_location = container.fighter_get_spatial_entity_from_fighter_location(player_fighter);
+
+	{
+		// 30 times per second
+		udp_update next_update;
+		next_update.update_type = UPDATE_HIGH_PRECISION;
+		next_update.timestamp = timestamp;
+
+		next_update.payload.high_precision.spatial_entity_id = player_location.index();
+		next_update.payload.high_precision.x = container.spatial_entity_get_x(player_location);
+		next_update.payload.high_precision.y = container.spatial_entity_get_y(player_location);
+
+		sendto(
+			udp_socket,
+			(char*)&next_update,
+			sizeof(next_update),
+			0,
+			(sockaddr *) &(udp_address_iterator),
+			sizeof(next_update)
+		);
+	}
 
 	container.for_each_spatial_entity([&](auto location){
+		auto shift_x = container.spatial_entity_get_x(location) - container.spatial_entity_get_x(player_location);
+		auto shift_y = container.spatial_entity_get_y(location) - container.spatial_entity_get_y(player_location);
+		if (abs(shift_x) > 80.f) {
+			return;
+		}
+		if (abs(shift_y) > 80.f) {
+			return;
+		}
+
+		if (abs(shift_x) > 10.f && (timestamp % 3) != 0) {
+			return;
+		}
+		if (abs(shift_y) > 10.f && (timestamp % 3) != 0) {
+			return;
+		}
+
+		{
+			udp_update next_update;
+			next_update.update_type = UPDATE_SPATIAL;
+			next_update.timestamp = timestamp;
+
+			next_update.payload.spatial.spatial_entity_id = location.index();
+			next_update.payload.spatial.x = shift_x * 100.f;
+			next_update.payload.spatial.y = shift_y * 100.f;
+			next_update.payload.spatial.direction = (uint8_t)(container.spatial_entity_get_direction(location) / 2.f / PI * 255);
+
+			sendto(
+				udp_socket,
+				(char*)&next_update,
+				sizeof(next_update),
+				0,
+				(sockaddr *) &(udp_address_iterator),
+				sizeof(next_update)
+			);
+		}
+
 		auto fighter = container.spatial_entity_get_fighter_from_fighter_location(location);
-		send_position(
-			container,
-			udp_address_iterator,
-			timestamp,
-			to_send,
-			location,
-			fighter
-		);
+		if (!fighter) return;
+
+		if ((timestamp % 6) == 0) {
+			// 5 times per second
+			udp_update next_update;
+			next_update.update_type = UPDATE_FIGHTER;
+			next_update.timestamp = timestamp;
+
+			next_update.payload.fighter.fighter_id = fighter.index();
+			next_update.payload.fighter.energy = (uint8_t)(container.fighter_get_energy(fighter) * 255);
+			next_update.payload.fighter.attack_energy = (uint8_t)(container.fighter_get_attack_energy_buffer(fighter) * 255);
+			next_update.payload.fighter.hp = container.fighter_get_hp(fighter);
+			next_update.payload.fighter.max_hp = container.fighter_get_max_hp(fighter);
+			next_update.payload.fighter.model = container.fighter_get_model(fighter);
+			sendto(
+				udp_socket,
+				(char*)&next_update,
+				sizeof(next_update),
+				0,
+				(sockaddr *) &(udp_address_iterator),
+				sizeof(next_update)
+			);
+		}
+
+		if ((timestamp % 15) == 0) {
+			// 2 times per second
+			udp_update next_update;
+			next_update.update_type = UPDATE_RELINK;
+			next_update.timestamp = timestamp;
+			next_update.payload.relink.fighter_id = fighter.index();
+			next_update.payload.relink.spatial_id = location.index();
+			sendto(
+				udp_socket,
+				(char*)&next_update,
+				sizeof(next_update),
+				0,
+				(sockaddr *) &(udp_address_iterator),
+				sizeof(next_update)
+			);
+		}
 	});
 }
 
@@ -429,9 +537,9 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 	float attack_energy_siphon = 0.5f;
 	float attack_energy_siphon_efficiency = 1.0f;
 	float attack_max_energy = 0.125f  * 5.5f;
-	float attack_half_angle = PI / 4.f;
+	float attack_half_angle = PI / 3.f;
 
-	auto attack_energy_decay = expf(-dt / 3.f);
+	auto attack_energy_decay = expf(-dt / 2.f);
 
 	container.for_each_fighter([&](auto fid){
 

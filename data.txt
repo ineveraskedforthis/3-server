@@ -29,6 +29,10 @@ object {
 		name{speed}
 		type{float}
 	}
+	property{
+		name{update_sent}
+		type{bitfield}
+	}
 }
 
 object{
@@ -130,6 +134,10 @@ object{
 	property{
 		name{parry_cooldown_timer}
 		type{float}
+	}
+	property{
+		name{update_sent}
+		type{bitfield}
 	}
 }
 
