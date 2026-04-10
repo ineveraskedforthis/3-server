@@ -67,6 +67,10 @@ constexpr uint8_t MODEL_RAT = 0;
 constexpr uint8_t MODEL_HUMAN = 1;
 constexpr uint8_t MODEL_UNKNOWN = 255;
 
+constexpr uint8_t WEAPON_TYPE_RAT = 0;
+constexpr uint8_t WEAPON_TYPE_HUMAN = 1;
+constexpr uint8_t WEAPON_TYPE_KNIFE = 2;
+
 constexpr inline int ACTION_LOGIN = 0;
 // sent via tcp
 struct action_update {
@@ -102,8 +106,8 @@ void handle_tcp_connection(dcon::data_container& container ) {
 	}
 	auto pid = container.create_player();
 	auto fighter = container.create_fighter();
-	container.fighter_set_max_hp(fighter, 10);
-	container.fighter_set_hp(fighter, 10);
+	container.fighter_set_max_hp(fighter, 25);
+	container.fighter_set_hp(fighter, 25);
 	container.fighter_set_energy(fighter, 1.f);
 	container.fighter_set_tx(fighter, 0.f);
 	container.fighter_set_ty(fighter, 0.f);
@@ -139,11 +143,13 @@ struct position_update {
 
 	int fighter_id;
 	float energy;
-	uint16_t hp;
-	uint16_t max_hp;
+	float attack_energy;
+	int16_t hp;
+	int16_t max_hp;
 
 	uint8_t model;
-	uint8_t padding[3];
+	uint8_t weapon_type;
+	uint8_t padding[2];
 };
 
 
@@ -164,6 +170,7 @@ void send_position(
 	to_send.fighter_id = fid.index();
 	if (fid) {
 		to_send.energy = container.fighter_get_energy(fid);
+		to_send.attack_energy = container.fighter_get_attack_energy_buffer(fid);
 		to_send.hp = container.fighter_get_hp(fid);
 		to_send.max_hp = container.fighter_get_max_hp(fid);
 		to_send.model = container.fighter_get_model(fid);
@@ -233,6 +240,7 @@ inline constexpr uint8_t MOVE = 0;
 inline constexpr uint8_t RUN_START = 1;
 inline constexpr uint8_t RUN_STOP = 2;
 inline constexpr uint8_t ATTACK_START = 3;
+inline constexpr uint8_t ATTACK_STOP = 4;
 
 inline constexpr uint8_t CLASS_MAGE = 0;
 inline constexpr uint8_t CLASS_WARRIOR = 1;
@@ -289,6 +297,15 @@ int consume_command(dcon::data_container& container, int connection, command::da
 		command.command_type == command::RUN_STOP
 	) {
 		container.fighter_set_running(fighter, false);
+	} else if (
+		command.command_type == command::ATTACK_START
+		&& container.fighter_get_energy(fighter) > 0.1f
+	) {
+		container.fighter_set_attacking(fighter, true);
+	} else if (
+		command.command_type == command::ATTACK_STOP
+	) {
+		container.fighter_set_attacking(fighter, false);
 	}
 
 
@@ -372,13 +389,25 @@ void rotate_toward(dcon::data_container & container, float dt, dcon::spatial_ent
 void update_game_state(dcon::data_container & container, std::chrono::microseconds last_tick) {
 	float dt = float(last_tick.count()) / 1'000'000.f;
 
-	float energy_regen_rate = 0.1f;
+	float energy_regen_rate = 0.2f;
 	float energy_walking_spend = 0.05f;
 	float energy_running_spend = 0.2f;
+	float attack_energy_siphon = 0.5f;
+	float attack_energy_siphon_efficiency = 1.0f;
+	float attack_max_energy = 0.125f  * 5.5f;
+	float attack_half_angle = PI / 4.f;
 
 	container.for_each_fighter([&](auto fid){
+
+		auto hp = container.fighter_get_hp(fid);
+		if (hp <= 0) {
+			return;
+		}
+
 		auto position = container.fighter_get_fighter_location(fid);
 		auto spatial = container.fighter_location_get_spatial_entity(position);
+
+		float attack_range = 2.f;
 
 		auto x = container.spatial_entity_get_x(spatial);
 		auto y = container.spatial_entity_get_y(spatial);
@@ -391,13 +420,18 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 		auto energy_loss = 0.f;
 
 		auto rotation_speed = 4.5f;
-		float speed_mod = 1.5f * move_speed_from_wrong_direction(container, spatial, dx, dy);
+		float speed_mod = 3.f * move_speed_from_wrong_direction(container, spatial, dx, dy);
 
 		auto running = container.fighter_get_running(fid) && container.fighter_get_energy(fid) > 0.1f;
 		if (running) {
 			speed_mod *= 2.f;
 		}
 
+		auto attacking = container.fighter_get_attacking(fid);
+		if (attacking) {
+			speed_mod *= 0.3f;
+			energy_loss += dt * attack_energy_siphon;
+		}
 
 		rotate_toward(container, dt, spatial, dx, dy, rotation_speed);
 
@@ -407,6 +441,25 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 			dy /= norm;
 		}
 
+		if (norm > 0.f) {
+			if (running) {
+				energy_loss += energy_running_spend * dt;
+			} else {
+				energy_loss += energy_walking_spend * dt;
+			}
+		}
+
+
+		auto total_energy_budget = container.fighter_get_energy(fid) + energy_gain;
+		auto actual_energy_spending_rate = 1.f;
+		if (energy_loss > 0.f && energy_loss > total_energy_budget) {
+			actual_energy_spending_rate = total_energy_budget / energy_loss;
+		}
+
+		// now we can actually charge attack and move according to available energy
+
+		// moving
+		speed_mod *= actual_energy_spending_rate;
 		if (container.fighter_get_action_type(fid) == command::MOVE) {
 			x = container.spatial_entity_get_x(spatial);
 			y = container.spatial_entity_get_y(spatial);
@@ -414,21 +467,79 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 			y += dy * dt * speed_mod;
 			container.spatial_entity_set_x(spatial, x);
 			container.spatial_entity_set_y(spatial, y);
+		}
 
-			auto spent_energy = dt;
+		/*
+		When player is charging attack, the energy is accumulated in a special buffer.
+		When player releases attack, he spends accumulated energy rounded down to the integer to deal damage.
+		X units of energy deal X * X damage.
+		If a target had accumulated not more than 2 X units of attack energy, then their attack is interrupted.
 
-			if (running) {
-				spent_energy *= energy_running_spend;
-			} else {
-				spent_energy *= energy_walking_spend;
-			}
+		Design goals are:
+		We want heavy attacks to be more cost efficient, so players want to use them.
+		We want players to be able intercept heavier attacks, so they could protect themselves.
+		But we also don't want light attack spam to be a valid tactic, so we don't allow light attacks to intercept really heavy attacks
+		*/
 
-			if (norm > 0.f) {
-				energy_loss += spent_energy;
+		auto cashback = 0.f;
+
+		if (attacking) {
+			auto siphoned_energy = dt * attack_energy_siphon * attack_energy_siphon_efficiency * actual_energy_spending_rate;
+			auto current_energy = container.fighter_get_attack_energy_buffer(fid);
+			cashback += std::max(0.f, current_energy + siphoned_energy - attack_max_energy) / attack_energy_siphon_efficiency / actual_energy_spending_rate;
+			siphoned_energy = std::min(attack_max_energy - current_energy, siphoned_energy);
+			container.fighter_set_attack_energy_buffer(fid, current_energy + siphoned_energy);
+		} else {
+			auto attack_strength = floorf(container.fighter_get_attack_energy_buffer(fid) / 0.125f);
+			auto damage = attack_strength * attack_strength;
+			cashback += container.fighter_get_attack_energy_buffer(fid) - attack_strength * 0.125f;
+			container.fighter_set_attack_energy_buffer(fid, 0.f);
+			if (damage > 0.f) {
+				container.for_each_fighter([&](dcon::fighter_id target){
+					if (target == fid) return;
+					auto spatial_target = container.fighter_get_spatial_entity_from_fighter_location(target);
+					auto candidate_x = container.spatial_entity_get_x(spatial_target);
+					auto candidate_y = container.spatial_entity_get_y(spatial_target);
+
+					x = container.spatial_entity_get_x(spatial);
+					y = container.spatial_entity_get_y(spatial);
+
+					auto target_direction_x = candidate_x - x;
+					auto target_direction_y = candidate_y - y;
+
+					auto target_angle = atan2f(target_direction_y, target_direction_x);
+					auto actual_angle = container.spatial_entity_get_direction(spatial);
+
+					if (
+						abs(target_angle - actual_angle) > attack_half_angle
+						&& abs(target_angle - actual_angle + PI *2.f) > attack_half_angle
+						&& abs(target_angle - actual_angle - PI *2.f) > attack_half_angle
+					) {
+						return;
+					}
+
+					auto target_distance_squared = target_direction_x * target_direction_x + target_direction_y * target_direction_y;
+
+					if (
+						target_distance_squared > attack_range * attack_range
+					) {
+						return;
+					}
+
+					auto hp = container.fighter_get_hp(target);
+					container.fighter_set_hp(target, hp - damage);
+
+					auto target_attack_energy = container.fighter_get_attack_energy_buffer(target);
+					auto target_attack_strength = floorf(target_attack_energy /  0.125f);
+
+					if (target_attack_strength <= attack_strength * 2.f) {
+						container.fighter_set_attack_energy_buffer(target, 0.f);
+					}
+				});
 			}
 		}
 
-		container.fighter_set_energy(fid, std::clamp(container.fighter_get_energy(fid) + energy_gain - energy_loss, 0.f, 1.f));
+		container.fighter_set_energy(fid, std::clamp(total_energy_budget + cashback - energy_loss, 0.f, 1.f));
 	});
 }
 
@@ -442,13 +553,13 @@ int main(int argc, char const* argv[]) {
 
 
 	// Spawn a few rats
-	for (int count = 0; count < 50; count++) {
-		auto x = normal_d(rng) * 50.f;
-		auto y = normal_d(rng) * 50.f;
+	for (int count = 0; count < 200; count++) {
+		auto x = normal_d(rng) * 10.f;
+		auto y = normal_d(rng) * 10.f;
 
 		auto fighter = container.create_fighter();
-		container.fighter_set_max_hp(fighter, 5);
-		container.fighter_set_hp(fighter, 5);
+		container.fighter_set_max_hp(fighter, 100);
+		container.fighter_set_hp(fighter, 100);
 		container.fighter_set_energy(fighter, 1.f);
 		container.fighter_set_tx(fighter, 0.f);
 		container.fighter_set_ty(fighter, 0.f);

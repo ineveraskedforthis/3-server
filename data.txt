@@ -52,6 +52,18 @@ object{
 		type{bitfield}
 	}
 	property{
+		name{attacking}
+		type{bitfield}
+	}
+	property{
+		name{attack_energy_buffer}
+		type{float}
+	}
+	property{
+		name{attack_energy_level}
+		type{uint8_t}
+	}
+	property{
 		name{model}
 		type{uint8_t}
 	}
