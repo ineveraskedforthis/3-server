@@ -531,13 +531,14 @@ void update_ai_state(dcon::data_container & container) {
 void update_game_state(dcon::data_container & container, std::chrono::microseconds last_tick) {
 	float dt = float(last_tick.count()) / 1'000'000.f;
 
-	float energy_regen_rate = 0.2f;
-	float energy_walking_spend = 0.05f;
-	float energy_running_spend = 0.2f;
-	float attack_energy_siphon = 0.5f;
-	float attack_energy_siphon_efficiency = 1.0f;
+	float energy_regen_rate = 0.15f;
+	float energy_walking_spend = energy_regen_rate * 0.75f;
+	float energy_running_spend = energy_regen_rate * 1.2f;
+	float attack_energy_siphon = energy_regen_rate * 1.25f;
+	float attack_energy_siphon_efficiency = 2.5f;
 	float attack_max_energy = 0.125f  * 5.5f;
 	float attack_half_angle = PI / 3.f;
+	float attack_energy_drain = energy_regen_rate * 0.05f;
 
 	auto attack_energy_decay = expf(-dt / 2.f);
 
@@ -568,13 +569,13 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 
 		auto running = container.fighter_get_running(fid) && container.fighter_get_energy(fid) > 0.1f;
 		if (running) {
-			speed_mod *= 2.f;
+			speed_mod *= 2.5f;
 		}
 
 		auto attacking = container.fighter_get_attacking(fid);
 		if (attacking) {
 			speed_mod *= 0.3f;
-			energy_loss += dt * attack_energy_siphon;
+			energy_loss += dt * (attack_energy_siphon + attack_energy_drain);
 		}
 
 		rotate_toward(container, dt, spatial, dx, dy, rotation_speed);
