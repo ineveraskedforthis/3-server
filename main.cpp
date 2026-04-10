@@ -246,6 +246,7 @@ inline constexpr uint8_t RUN_START = 1;
 inline constexpr uint8_t RUN_STOP = 2;
 inline constexpr uint8_t ATTACK_START = 3;
 inline constexpr uint8_t ATTACK_STOP = 4;
+inline constexpr uint8_t RESPAWN = 5;
 
 inline constexpr uint8_t CLASS_MAGE = 0;
 inline constexpr uint8_t CLASS_WARRIOR = 1;
@@ -287,6 +288,7 @@ int consume_command(dcon::data_container& container, int connection, command::da
 
 	auto control = container.player_get_player_control(id);
 	auto fighter = container.player_control_get_controlled(control);
+	auto location = container.fighter_get_spatial_entity_from_fighter_location(fighter);
 
 	if (
 		command.command_type == command::MOVE
@@ -310,6 +312,13 @@ int consume_command(dcon::data_container& container, int connection, command::da
 	} else if (
 		command.command_type == command::ATTACK_STOP
 	) {
+		container.fighter_set_attacking(fighter, false);
+	} else if (
+		command.command_type == command::RESPAWN
+	) {
+		container.fighter_set_hp(fighter, container.fighter_get_max_hp(fighter));
+		container.spatial_entity_set_x(location, 0.f);
+		container.spatial_entity_set_y(location, 0.f);
 		container.fighter_set_attacking(fighter, false);
 	}
 
