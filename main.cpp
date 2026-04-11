@@ -196,12 +196,16 @@ struct relink_update {
 static_assert(sizeof(relink_update) == 12);
 
 struct udp_update {
+
 	// 4 bytes
 	uint8_t update_type;
 	uint8_t padding[3];
 
 	// 4 bytes
 	int timestamp;
+
+	// 4 bytes
+	int sent_to_player;
 
 	// 12 bytes
 	union {
@@ -211,7 +215,7 @@ struct udp_update {
 		high_precision_update high_precision;
 	} payload;
 };
-static_assert(sizeof(udp_update) == 20);
+static_assert(sizeof(udp_update) == 24);
 
 void
 send_network_update_player(
@@ -236,6 +240,7 @@ send_network_update_player(
 		udp_update next_update;
 		next_update.update_type = UPDATE_HIGH_PRECISION;
 		next_update.timestamp = timestamp;
+		next_update.sent_to_player = player.index();
 
 		next_update.payload.high_precision.spatial_entity_id = player_location.index();
 		next_update.payload.high_precision.x = container.spatial_entity_get_x(player_location);
@@ -272,6 +277,7 @@ send_network_update_player(
 			udp_update next_update;
 			next_update.update_type = UPDATE_SPATIAL;
 			next_update.timestamp = timestamp;
+			next_update.sent_to_player = player.index();
 
 			next_update.payload.spatial.spatial_entity_id = location.index();
 			next_update.payload.spatial.x = shift_x * 100.f;
@@ -296,6 +302,7 @@ send_network_update_player(
 			udp_update next_update;
 			next_update.update_type = UPDATE_FIGHTER;
 			next_update.timestamp = timestamp;
+			next_update.sent_to_player = player.index();
 
 			next_update.payload.fighter.fighter_id = fighter.index();
 			next_update.payload.fighter.energy = (uint8_t)(container.fighter_get_energy(fighter) * 255);
@@ -318,6 +325,7 @@ send_network_update_player(
 			udp_update next_update;
 			next_update.update_type = UPDATE_RELINK;
 			next_update.timestamp = timestamp;
+			next_update.sent_to_player = player.index();
 			next_update.payload.relink.fighter_id = fighter.index();
 			next_update.payload.relink.spatial_id = location.index();
 			sendto(
