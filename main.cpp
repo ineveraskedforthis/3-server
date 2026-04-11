@@ -18,6 +18,7 @@ namespace std {
 #include "unordered_dense.h"
 #include <mutex>
 #include <thread>
+#include <tuple>
 
 
 static fd_set udp_singleton;
@@ -36,6 +37,13 @@ static std::default_random_engine rng;
 static std::uniform_real_distribution<float> uniform{0.0, 1.0};
 static std::normal_distribution<float> normal_d{0.f, 1.f};
 static std::normal_distribution<float> size_d{1.f, 0.3f};
+
+// Per-player tracking of last sent state for delta compression
+// Key: (player_id, spatial_entity_id), Value: (last_timestamp, last_x, last_y, last_direction, last_hp, last_energy, last_attack_energy)
+static ankerl::unordered_dense::map<
+	std::pair<int, int>,
+	std::tuple<int, float, float, uint8_t, int16_t, uint8_t, uint8_t>
+> player_entity_history;
 
 void
 handle_udp_subscription(
@@ -230,9 +238,11 @@ send_network_update_player(
 
 	auto player_fighter = container.player_get_controlled_from_player_control(player);
 	auto player_location = container.fighter_get_spatial_entity_from_fighter_location(player_fighter);
+	int player_idx = player.index();
+	int player_loc_idx = player_location.index();
 
 	{
-		// 30 times per second
+		// 30 times per second - HIGH_PRECISION update for own position
 		udp_update next_update;
 		next_update.update_type = UPDATE_HIGH_PRECISION;
 		next_update.timestamp = timestamp;
@@ -268,7 +278,36 @@ send_network_update_player(
 			return;
 		}
 
-		{
+		int loc_idx = location.index();
+		auto key = std::make_pair(player_idx, loc_idx);
+		
+		// Get current state
+		float cur_x = container.spatial_entity_get_x(location);
+		float cur_y = container.spatial_entity_get_y(location);
+		uint8_t cur_dir = (uint8_t)(container.spatial_entity_get_direction(location) / 2.f / PI * 255);
+		
+		// Check if we have history for this player-entity pair
+		bool has_history = player_entity_history.count(key) > 0;
+		bool should_send_spatial = !has_history;
+		
+		if (has_history) {
+			auto& hist = player_entity_history[key];
+			float last_x = std::get<1>(hist);
+			float last_y = std::get<2>(hist);
+			uint8_t last_dir = std::get<3>(hist);
+			
+			// Only send if state changed significantly
+			const float POSITION_THRESHOLD = 0.01f; // ~1cm
+			const uint8_t DIR_THRESHOLD = 2; // ~2/255 of full circle
+			
+			if (fabsf(cur_x - last_x) > POSITION_THRESHOLD ||
+			    fabsf(cur_y - last_y) > POSITION_THRESHOLD ||
+			    abs((int)cur_dir - (int)last_dir) > DIR_THRESHOLD) {
+				should_send_spatial = true;
+			}
+		}
+		
+		if (should_send_spatial) {
 			udp_update next_update;
 			next_update.update_type = UPDATE_SPATIAL;
 			next_update.timestamp = timestamp;
@@ -276,7 +315,7 @@ send_network_update_player(
 			next_update.payload.spatial.spatial_entity_id = location.index();
 			next_update.payload.spatial.x = shift_x * 100.f;
 			next_update.payload.spatial.y = shift_y * 100.f;
-			next_update.payload.spatial.direction = (uint8_t)(container.spatial_entity_get_direction(location) / 2.f / PI * 255);
+			next_update.payload.spatial.direction = cur_dir;
 
 			sendto(
 				udp_socket,
@@ -285,6 +324,11 @@ send_network_update_player(
 				0,
 				(sockaddr *) &(udp_address_iterator),
 				sizeof(next_update)
+			);
+			
+			// Update history
+			player_entity_history[key] = std::make_tuple(
+				timestamp, cur_x, cur_y, cur_dir, 0, 0, 0
 			);
 		}
 
@@ -292,29 +336,57 @@ send_network_update_player(
 		if (!fighter) return;
 
 		if ((timestamp % 6) == 0) {
-			// 5 times per second
-			udp_update next_update;
-			next_update.update_type = UPDATE_FIGHTER;
-			next_update.timestamp = timestamp;
+			// 5 times per second - FIGHTER update
+			int16_t cur_hp = container.fighter_get_hp(fighter);
+			uint8_t cur_energy = (uint8_t)(container.fighter_get_energy(fighter) * 255);
+			uint8_t cur_attack_energy = (uint8_t)(container.fighter_get_attack_energy_buffer(fighter) * 255);
+			uint8_t cur_model = container.fighter_get_model(fighter);
+			
+			bool should_send_fighter = !has_history;
+			
+			if (has_history) {
+				auto& hist = player_entity_history[key];
+				int16_t last_hp = std::get<4>(hist);
+				uint8_t last_energy = std::get<5>(hist);
+				uint8_t last_attack_energy = std::get<6>(hist);
+				
+				// Only send if fighter state changed
+				if (cur_hp != last_hp || 
+				    abs((int)cur_energy - (int)last_energy) > 2 ||
+				    abs((int)cur_attack_energy - (int)last_attack_energy) > 2) {
+					should_send_fighter = true;
+				}
+			}
+			
+			if (should_send_fighter) {
+				udp_update next_update;
+				next_update.update_type = UPDATE_FIGHTER;
+				next_update.timestamp = timestamp;
 
-			next_update.payload.fighter.fighter_id = fighter.index();
-			next_update.payload.fighter.energy = (uint8_t)(container.fighter_get_energy(fighter) * 255);
-			next_update.payload.fighter.attack_energy = (uint8_t)(container.fighter_get_attack_energy_buffer(fighter) * 255);
-			next_update.payload.fighter.hp = container.fighter_get_hp(fighter);
-			next_update.payload.fighter.max_hp = container.fighter_get_max_hp(fighter);
-			next_update.payload.fighter.model = container.fighter_get_model(fighter);
-			sendto(
-				udp_socket,
-				(char*)&next_update,
-				sizeof(next_update),
-				0,
-				(sockaddr *) &(udp_address_iterator),
-				sizeof(next_update)
-			);
+				next_update.payload.fighter.fighter_id = fighter.index();
+				next_update.payload.fighter.energy = cur_energy;
+				next_update.payload.fighter.attack_energy = cur_attack_energy;
+				next_update.payload.fighter.hp = cur_hp;
+				next_update.payload.fighter.max_hp = container.fighter_get_max_hp(fighter);
+				next_update.payload.fighter.model = cur_model;
+				sendto(
+					udp_socket,
+					(char*)&next_update,
+					sizeof(next_update),
+					0,
+					(sockaddr *) &(udp_address_iterator),
+					sizeof(next_update)
+				);
+				
+				// Update history with fighter data
+				std::get<4>(player_entity_history[key]) = cur_hp;
+				std::get<5>(player_entity_history[key]) = cur_energy;
+				std::get<6>(player_entity_history[key]) = cur_attack_energy;
+			}
 		}
 
 		if ((timestamp % 15) == 0) {
-			// 2 times per second
+			// 2 times per second - RELINK update (always send periodically for reliability)
 			udp_update next_update;
 			next_update.update_type = UPDATE_RELINK;
 			next_update.timestamp = timestamp;
@@ -447,6 +519,19 @@ void clean_player(dcon::data_container& container, int connection) {
 
 	for (int i = 0; i < (int)players_to_delete.size(); ++i) {
 		auto pid = players_to_delete[i];
+		int player_idx = pid.index();
+		
+		// Clean up per-player history for this disconnected player
+		std::vector<std::pair<int, int>> keys_to_remove;
+		for (auto it = player_entity_history.begin(); it != player_entity_history.end(); ++it) {
+			if (it->first.first == player_idx) {
+				keys_to_remove.push_back(it->first);
+			}
+		}
+		for (const auto& key : keys_to_remove) {
+			player_entity_history.erase(key);
+		}
+		
 		auto control = container.player_get_player_control(pid);
 		auto fighter = container.player_control_get_controlled(control);
 		// event_notification(container, fighter, update::EVENT_LEFT_GAME);
