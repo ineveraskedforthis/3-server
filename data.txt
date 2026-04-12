@@ -1,3 +1,6 @@
+global{no-conversions}
+include{"dcon_containers.hpp"}
+
 object{
 	name{udp_subscription}
 	size{3000}
@@ -39,6 +42,10 @@ object{
 	name{fighter}
 	size{3000}
 	storage_type{erasable}
+	property{
+		name{race}
+		type{race_id}
+	}
 	property{
 		name{hp}
 		type{int}
@@ -238,6 +245,110 @@ object{
 	property{
 		name{know_my_body}
 		type{bitfield}
+	}
+}
+
+object{
+	name{race}
+	size{20}
+	storage_type{erasable}
+
+	property{
+		name{body_item}
+		type{item_type_id}
+	}
+}
+
+object{
+	name{commodity}
+	size{50}
+	storage_type{erasable}
+
+	property{
+		name{weight}
+		type{float}
+	}
+}
+
+object{
+	name{skill}
+	size{200}
+	storage_type{erasable}
+
+	property{
+		name{difficulty}
+		type{float}
+	}
+}
+
+object{
+	name{item_type}
+	size{200}
+	storage_type{erasable}
+
+	property{
+		name{base_weight}
+		type{float}
+	}
+}
+
+object{
+	name{action_extract}
+	size{200}
+	storage_type{erasable}
+
+	property{
+		name{difficulty}
+		type{float}
+	}
+	property{
+		name{required_skill}
+		type{skill_set}
+	}
+	property{
+		name{input}
+		type{item_type_id}
+	}
+	property{
+		name{commodity_output}
+		type{commodity_set}
+	}
+	property{
+		name{item_output}
+		type{item_set}
+	}
+}
+
+object{
+	name{item}
+	size{10000}
+	storage_type{erasable}
+
+	property{
+		name{item_type}
+		type{item_type_id}
+	}
+	property{
+		name{relative_weight}
+		type{float}
+	}
+}
+
+relationship{
+	name{can_eat}
+	size{1000}
+	storage_type{erasable}
+
+	link{
+		object{race}
+		name{race}
+		type{many}
+	}
+
+	link{
+		object{commodity}
+		name{commodity}
+		type{many}
 	}
 }
 

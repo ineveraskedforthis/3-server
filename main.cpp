@@ -696,6 +696,78 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 	});
 }
 
+void generate_world(dcon::data_container& container) {
+	/*
+	Rats:
+	Weight: 20
+	Fur: 5
+	Meat: 5
+	Bones: 5
+	Waste: 5
+	*/
+	auto rat_meat = container.create_commodity();
+	container.commodity_set_weight(rat_meat, 1.f);
+
+	auto rat_bones = container.create_commodity();
+	container.commodity_set_weight(rat_bones, 1.f);
+
+	auto rat_fur = container.create_item_type();
+	container.item_type_set_base_weight(rat_fur, 5.f);
+
+	auto rat_body = container.create_item_type();
+	container.item_type_set_base_weight(rat_body, 20.f);
+
+	auto skinned_rat_body = container.create_item_type();
+	container.item_type_set_base_weight(skinned_rat_body, 15.f);
+
+	auto rat_skeleton = container.create_item_type();
+	container.item_type_set_base_weight(rat_skeleton, 7.f);
+
+	auto skinning_rat = container.create_action_extract();
+	item_set skinning_rat_result {};
+	skinning_rat_result.item[0] = rat_fur;
+	skinning_rat_result.item[1] = skinned_rat_body;
+	container.action_extract_set_item_output(skinning_rat, skinning_rat_result);
+
+	auto butcher_rat = container.create_action_extract();
+	commodity_set rat_meat_extracted {};
+	rat_meat_extracted.commodity[0] = rat_meat;
+	rat_meat_extracted.amount[0] = 5;
+	item_set butcher_rat_skeleton {};
+	skinning_rat_result.item[0] = rat_skeleton;
+	container.action_extract_set_input(butcher_rat, skinned_rat_body);
+	container.action_extract_set_commodity_output(butcher_rat, rat_meat_extracted);
+	container.action_extract_set_item_output(butcher_rat, butcher_rat_skeleton);
+
+	auto rat_race = container.create_race();
+	container.race_set_body_item(rat_race, rat_body);
+
+	/*
+	Humans:
+	Weight: 13
+	Skin: 1
+	Meat: 5
+	Bones: 4
+	Waste: 3
+	*/
+
+	auto human_body = container.create_item_type();
+	container.item_type_set_base_weight(human_body, 13.f);
+
+	auto skinned_human_body = container.create_item_type();
+	container.item_type_set_base_weight(skinned_human_body, 11.f);
+
+	auto human_skeleton = container.create_item_type();
+	container.item_type_set_base_weight(human_skeleton, 4.f);
+
+	auto human_race = container.create_race();
+	container.race_set_body_item(human_race, human_body);
+
+
+	auto skin_human = container.create_action_extract();
+
+}
+
 dcon::data_container container;
 
 int main(int argc, char const* argv[]) {
