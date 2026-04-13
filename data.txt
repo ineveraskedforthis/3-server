@@ -257,6 +257,21 @@ object{
 		name{body_item}
 		type{item_type_id}
 	}
+
+	property{
+		name{movement_energy_cost}
+		type{float}
+	}
+
+	property{
+		name{movement_energy_throughput}
+		type{float}
+	}
+
+	property{
+		name{max_hp}
+		type{int16_t}
+	}
 }
 
 object{
@@ -331,6 +346,24 @@ object{
 	property{
 		name{relative_weight}
 		type{float}
+	}
+}
+
+relationship{
+	name{inventory}
+	size{10000}
+	storage_type{erasable}
+
+	link{
+		object{item}
+		name{item}
+		type{unique}
+	}
+
+	link{
+		object{fighter}
+		name{fighter}
+		type{many}
 	}
 }
 

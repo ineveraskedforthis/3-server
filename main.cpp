@@ -20,6 +20,14 @@ namespace std {
 #include <thread>
 
 
+namespace races{
+static dcon::race_id rats;
+static dcon::race_id humans;
+static dcon::race_id graci;
+static dcon::race_id elodin;
+static dcon::race_id meat_ball;
+}
+
 static fd_set udp_singleton;
 static fd_set udp_select_singleton;
 static fd_set active_connections;
@@ -76,14 +84,43 @@ constexpr uint8_t WEAPON_TYPE_RAT = 0;
 constexpr uint8_t WEAPON_TYPE_HUMAN = 1;
 constexpr uint8_t WEAPON_TYPE_KNIFE = 2;
 
-constexpr inline int ACTION_LOGIN = 0;
-// sent via tcp
-struct action_update {
-	int action;
+constexpr inline uint8_t TCP_LOGIN = 0;
+constexpr inline uint8_t TCP_FIGHTER = 1;
+
+struct player_creation;
+
+struct tcp_login_update{
 	int player_id;
-	int fighter_id;
-	int entity_id;
+
+	uint8_t padding[4];
+
+	uint8_t padding2[4];
 };
+static_assert(sizeof(tcp_login_update) == 12);
+
+struct tcp_fighter_update{
+	int fighter_id;
+
+	int location_id;
+
+	uint8_t race_id;
+	uint8_t padding2[3];
+};
+static_assert(sizeof(tcp_fighter_update) == 12);
+
+struct tcp_update{
+	// 4 bytes
+	uint8_t update_type;
+	uint8_t padding[3];
+
+	// 12 bytes
+	union {
+		tcp_login_update login;
+		tcp_fighter_update fighter;
+	} payload;
+};
+static_assert(sizeof(tcp_update) == 16);
+
 
 void handle_tcp_connection(dcon::data_container& container ) {
 	// connection requests
@@ -110,24 +147,12 @@ void handle_tcp_connection(dcon::data_container& container ) {
 		return;
 	}
 	auto pid = container.create_player();
-	auto fighter = container.create_fighter();
-	container.fighter_set_max_hp(fighter, 40);
-	container.fighter_set_hp(fighter, 40);
-	container.fighter_set_energy(fighter, 1.f);
-	container.fighter_set_tx(fighter, 0.f);
-	container.fighter_set_ty(fighter, 0.f);
-	container.fighter_set_model(fighter, MODEL_HUMAN);
-	auto location = container.create_spatial_entity();
-	container.force_create_fighter_location(fighter, location);
-	container.force_create_player_control(pid, fighter);
 
-	action_update to_send{};
-	to_send.action = ACTION_LOGIN;
-	to_send.player_id = pid.index();
-	to_send.fighter_id = fighter.index();
-	to_send.entity_id = location.index();
+	tcp_update to_send{};
+	to_send.update_type = TCP_LOGIN;
+	to_send.payload.login.player_id = pid.index();
 
-	send(new_connection, (char*)&to_send, sizeof(action_update), 0);
+	send(new_connection, (char*)&to_send, sizeof(tcp_update), 0);
 
 	container.player_set_connection(pid, new_connection);
 	container.player_set_address(pid, client_address.sin_addr.s_addr);
@@ -178,7 +203,7 @@ struct fighter_update {
 	// 4 bytes
 	uint8_t energy;
 	uint8_t attack_energy;
-	uint8_t model;
+	uint8_t race;
 	uint8_t weapon_type;
 };
 static_assert(sizeof(fighter_update) == 12);
@@ -309,7 +334,7 @@ send_network_update_player(
 			next_update.payload.fighter.attack_energy = (uint8_t)(container.fighter_get_attack_energy_buffer(fighter) * 255);
 			next_update.payload.fighter.hp = container.fighter_get_hp(fighter);
 			next_update.payload.fighter.max_hp = container.fighter_get_max_hp(fighter);
-			next_update.payload.fighter.model = container.fighter_get_model(fighter);
+			next_update.payload.fighter.race = container.fighter_get_race(fighter).id.index();
 			sendto(
 				udp_socket,
 				(char*)&next_update,
@@ -376,8 +401,10 @@ struct data {
 	float target_y;
 	uint8_t command_type;
 	uint8_t command_data;
-	uint8_t padding[2];
+	uint8_t race;
+	uint8_t padding[1];
 };
+static_assert(sizeof(data) == 20);
 }
 
 int consume_command(dcon::data_container& container, int connection, command::data command) {
@@ -400,42 +427,83 @@ int consume_command(dcon::data_container& container, int connection, command::da
 
 	/*
 	Every player has a fighter?
+	No longer
 	*/
 
 	auto control = container.player_get_player_control(id);
 	auto fighter = container.player_control_get_controlled(control);
 	auto location = container.fighter_get_spatial_entity_from_fighter_location(fighter);
 
+	/*
+	Some commands are available only for fighters
+	*/
+
+	if (fighter) {
+		if (
+			command.command_type == command::MOVE
+		) {
+			container.fighter_set_tx(fighter, command.target_x);
+			container.fighter_set_ty(fighter, command.target_y);
+		} else if (
+			command.command_type == command::RUN_START
+			&& container.fighter_get_energy(fighter) > 0.2f
+		) {
+			container.fighter_set_running(fighter, true);
+		} else if (
+			command.command_type == command::RUN_STOP
+		) {
+			container.fighter_set_running(fighter, false);
+		} else if (
+			command.command_type == command::ATTACK_START
+			&& container.fighter_get_energy(fighter) > 0.1f
+		) {
+			container.fighter_set_attacking(fighter, true);
+		} else if (
+			command.command_type == command::ATTACK_STOP
+		) {
+			container.fighter_set_attacking(fighter, false);
+		}
+	}
+
+
 	if (
-		command.command_type == command::MOVE
-	) {
-		container.fighter_set_tx(fighter, command.target_x);
-		container.fighter_set_ty(fighter, command.target_y);
-	} else if (
-		command.command_type == command::RUN_START
-		&& container.fighter_get_energy(fighter) > 0.2f
-	) {
-		container.fighter_set_running(fighter, true);
-	} else if (
-		command.command_type == command::RUN_STOP
-	) {
-		container.fighter_set_running(fighter, false);
-	} else if (
-		command.command_type == command::ATTACK_START
-		&& container.fighter_get_energy(fighter) > 0.1f
-	) {
-		container.fighter_set_attacking(fighter, true);
-	} else if (
-		command.command_type == command::ATTACK_STOP
-	) {
-		container.fighter_set_attacking(fighter, false);
-	} else if (
 		command.command_type == command::RESPAWN
 	) {
-		container.fighter_set_hp(fighter, container.fighter_get_max_hp(fighter));
-		container.spatial_entity_set_x(location, 0.f);
-		container.spatial_entity_set_y(location, 0.f);
-		container.fighter_set_attacking(fighter, false);
+		auto race = dcon::race_id { command.race };
+		if (container.race_is_valid(race)) {
+			if (!fighter) {
+				fighter = container.create_fighter();
+				container.force_create_player_control(id, fighter);
+			}
+
+			if (!location) {
+				location = container.create_spatial_entity();
+				container.force_create_fighter_location(fighter, location);
+			}
+
+			auto max_hp = container.race_get_max_hp(race);
+
+			container.fighter_set_max_hp(fighter, max_hp);
+			container.fighter_set_hp(fighter, max_hp);
+			container.fighter_set_energy(fighter, 1.f);
+			container.fighter_set_tx(fighter, 0.f);
+			container.fighter_set_ty(fighter, 0.f);
+			container.fighter_set_attacking(fighter, false);
+			container.fighter_set_race(fighter, race);
+			container.spatial_entity_set_x(location, 0.f);
+			container.spatial_entity_set_y(location, 0.f);
+
+			/*
+			Notify the player of new fighter/location
+			*/
+			tcp_update to_send{};
+			to_send.update_type = TCP_FIGHTER;
+			to_send.payload.fighter.fighter_id = fighter.index();
+			to_send.payload.fighter.location_id = location.index();
+			to_send.payload.fighter.race_id = race.index();
+
+			send(connection, (char*)&to_send, sizeof(tcp_update), 0);
+		}
 	}
 
 
@@ -540,8 +608,8 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 	float dt = float(last_tick.count()) / 1'000'000.f;
 
 	float energy_regen_rate = 0.15f;
-	float energy_walking_spend = energy_regen_rate * 0.75f;
-	float energy_running_spend = energy_regen_rate * 1.2f;
+	// float energy_walking_spend = energy_regen_rate * 0.75f;
+	// float energy_running_spend = energy_regen_rate * 1.2f;
 	float attack_energy_siphon = energy_regen_rate * 1.25f;
 	float attack_energy_siphon_efficiency = 2.5f;
 	float attack_max_energy = 0.125f  * 5.5f;
@@ -551,11 +619,27 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 	auto attack_energy_decay = expf(-dt / 2.f);
 
 	container.for_each_fighter([&](auto fid){
-
 		auto hp = container.fighter_get_hp(fid);
 		if (hp <= 0) {
 			return;
 		}
+
+		auto race = container.fighter_get_race(fid);
+
+		auto movement_energy_cost = container.race_get_movement_energy_cost(race);
+		auto movement_energy_throughput = container.race_get_movement_energy_throughput(race);
+		auto body = container.race_get_body_item(race);
+		auto base_weight = container.item_type_get_base_weight(body);
+
+		auto weight = base_weight;
+
+		/*
+		We assume:
+		To move 1 unit of mass along the path of length 1 we have to spend *movement_energy_cost* units of energy.
+		When walking race outputs *movement_energy_throughput* of energy.
+		Running multiplies the throughput and increases movement_energy_cost.
+		When we have to rotate, our throughput falls.
+		*/
 
 		auto position = container.fighter_get_fighter_location(fid);
 		auto spatial = container.fighter_location_get_spatial_entity(position);
@@ -573,16 +657,17 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 		auto energy_loss = 0.f;
 
 		auto rotation_speed = 4.5f;
-		float speed_mod = 3.f * move_speed_from_wrong_direction(container, spatial, dx, dy);
+		movement_energy_throughput *= move_speed_from_wrong_direction(container, spatial, dx, dy);
 
 		auto running = container.fighter_get_running(fid) && container.fighter_get_energy(fid) > 0.1f;
 		if (running) {
-			speed_mod *= 2.5f;
+			movement_energy_throughput *= 2.5f;
+			movement_energy_cost *= 1.5f;
 		}
 
 		auto attacking = container.fighter_get_attacking(fid);
 		if (attacking) {
-			speed_mod *= 0.3f;
+			movement_energy_throughput *= 0.3f;
 			energy_loss += dt * (attack_energy_siphon + attack_energy_drain);
 		}
 
@@ -595,11 +680,8 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 		}
 
 		if (norm > 0.f) {
-			if (running) {
-				energy_loss += energy_running_spend * dt;
-			} else {
-				energy_loss += energy_walking_spend * dt;
-			}
+			energy_loss += movement_energy_cost * movement_energy_throughput * dt;
+
 		}
 
 
@@ -612,12 +694,14 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 		// now we can actually charge attack and move according to available energy
 
 		// moving
-		speed_mod *= actual_energy_spending_rate;
-		if (container.fighter_get_action_type(fid) == command::MOVE) {
+		if (norm > 0.f) {
+			auto actual_movement_throughput = movement_energy_throughput * actual_energy_spending_rate;
+			auto energy_spent_on_movement = actual_movement_throughput * dt;
+			auto movement = energy_spent_on_movement / weight / movement_energy_cost;
 			x = container.spatial_entity_get_x(spatial);
 			y = container.spatial_entity_get_y(spatial);
-			x += dx * dt * speed_mod;
-			y += dy * dt * speed_mod;
+			x += dx * movement;
+			y += dy * movement;
 			container.spatial_entity_set_x(spatial, x);
 			container.spatial_entity_set_y(spatial, y);
 		}
@@ -696,13 +780,21 @@ void update_game_state(dcon::data_container & container, std::chrono::microsecon
 	});
 }
 
+
 void generate_world(dcon::data_container& container) {
+
+	/*
+	Energy is spent proportinally to movement and mass.
+	Energy efficiency modifies energy spent on movement.
+	1.f is energy efficiency of humans
+	*/
+
 	/*
 	Rats:
-	Weight: 20
+	Weight: 50
 	Fur: 5
-	Meat: 5
-	Bones: 5
+	Meat: 20
+	Bones: 20
 	Waste: 5
 	*/
 	auto rat_meat = container.create_commodity();
@@ -715,13 +807,13 @@ void generate_world(dcon::data_container& container) {
 	container.item_type_set_base_weight(rat_fur, 5.f);
 
 	auto rat_body = container.create_item_type();
-	container.item_type_set_base_weight(rat_body, 20.f);
+	container.item_type_set_base_weight(rat_body, 60.f);
 
 	auto skinned_rat_body = container.create_item_type();
-	container.item_type_set_base_weight(skinned_rat_body, 15.f);
+	container.item_type_set_base_weight(skinned_rat_body, 40.f);
 
 	auto rat_skeleton = container.create_item_type();
-	container.item_type_set_base_weight(rat_skeleton, 7.f);
+	container.item_type_set_base_weight(rat_skeleton, 20.f);
 
 	auto skinning_rat = container.create_action_extract();
 	item_set skinning_rat_result {};
@@ -739,40 +831,44 @@ void generate_world(dcon::data_container& container) {
 	container.action_extract_set_commodity_output(butcher_rat, rat_meat_extracted);
 	container.action_extract_set_item_output(butcher_rat, butcher_rat_skeleton);
 
-	auto rat_race = container.create_race();
-	container.race_set_body_item(rat_race, rat_body);
+	races::rats = container.create_race();
+	container.race_set_body_item(races::rats , rat_body);
+	container.race_set_movement_energy_cost(races::rats, 0.015f);
+	container.race_set_movement_energy_throughput(races::rats, 4.f);
+	container.race_set_max_hp(races::rats, 60.f);
 
 	/*
 	Humans:
-	Weight: 13
+	Weight: 30
 	Skin: 1
-	Meat: 5
-	Bones: 4
-	Waste: 3
+	Meat: 10
+	Bones: 10
+	Waste: 9
 	*/
 
 	auto human_body = container.create_item_type();
-	container.item_type_set_base_weight(human_body, 13.f);
+	container.item_type_set_base_weight(human_body, 30.f);
 
 	auto skinned_human_body = container.create_item_type();
-	container.item_type_set_base_weight(skinned_human_body, 11.f);
+	container.item_type_set_base_weight(skinned_human_body, 20.f);
 
 	auto human_skeleton = container.create_item_type();
-	container.item_type_set_base_weight(human_skeleton, 4.f);
+	container.item_type_set_base_weight(human_skeleton, 10.f);
 
-	auto human_race = container.create_race();
-	container.race_set_body_item(human_race, human_body);
+	races::humans = container.create_race();
+	container.race_set_body_item(races::humans, human_body);
+	container.race_set_movement_energy_cost(races::humans, 0.01f);
+	container.race_set_movement_energy_throughput(races::humans, 1.f);
+	container.race_set_max_hp(races::humans, 40.f);
 
-
-	auto skin_human = container.create_action_extract();
-
+	// auto skin_human = container.create_action_extract();
 }
 
 dcon::data_container container;
 
 int main(int argc, char const* argv[]) {
 
-
+	generate_world(container);
 
 	// Spawn a few rats
 	for (int count = 0; count < 200; count++) {
@@ -786,6 +882,7 @@ int main(int argc, char const* argv[]) {
 		container.fighter_set_tx(fighter, 0.f);
 		container.fighter_set_ty(fighter, 0.f);
 		container.fighter_set_model(fighter, MODEL_RAT);
+		container.fighter_set_race(fighter, races::rats);
 
 		auto location = container.create_spatial_entity();
 		container.spatial_entity_set_x(location, x);
