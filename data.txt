@@ -43,10 +43,6 @@ object{
 	size{3000}
 	storage_type{erasable}
 	property{
-		name{race}
-		type{race_id}
-	}
-	property{
 		name{hp}
 		type{int}
 	}
@@ -123,10 +119,6 @@ object{
 		type{float}
 	}
 	property{
-		name{sprite_id}
-		type{uint16_t}
-	}
-	property{
 		name{invisible_timer}
 		type{float}
 	}
@@ -168,12 +160,29 @@ object{
 }
 
 relationship{
-	name{fighter_location}
+	name{embodiment}
 	size{4000}
 	storage_type{erasable}
 	link{
 		object{fighter}
 		name{fighter}
+		type{unique}
+	}
+
+	link{
+		object{item}
+		name{item}
+		type{unique}
+	}
+}
+
+relationship{
+	name{item_location}
+	size{10000}
+	storage_type{erasable}
+	link{
+		object{item}
+		name{item}
 		type{unique}
 	}
 
@@ -300,6 +309,11 @@ object{
 	name{item_type}
 	size{200}
 	storage_type{erasable}
+
+	property{
+		name{race}
+		type{race_id}
+	}
 
 	property{
 		name{base_weight}
